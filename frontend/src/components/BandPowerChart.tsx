@@ -1,36 +1,43 @@
 import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useEEGStore } from '../store/eeg';
+import { channelName } from '../constants';
 
 const COLORS = ['#1565c0','#2e7d32','#f9a825','#e53935','#6a1b9a'];
 const LABELS = ['Delta','Theta','Alpha','Beta','Gamma'];
-const CHANNEL_NAMES: Record<string, string> = {
-  Fp1: '左前额', Fp2: '右前额', F3: '左额', F4: '右额',
-  C3: '左中央', C4: '右中央', P3: '左顶', P4: '右顶',
-  O1: '左枕', O2: '右枕'
-};
 
 export const BandPowerChart: React.FC = () => {
-  const { bandPower, selectedChannel, playbackMode } = useEEGStore();
-  const channelName = CHANNEL_NAMES[selectedChannel] || selectedChannel;
+  const { bandPower, sampleChannel, selectedChannel, playbackMode, streamStatus, streamError } = useEEGStore();
+  const name = channelName(selectedChannel);
+  // 数据必须属于当前通道，否则视为无数据，避免上一通道的频段柱残留
+  const activeBandPower = playbackMode || sampleChannel === selectedChannel ? bandPower : null;
+  const failed = streamStatus === 'error' && !playbackMode;
+  const loading = streamStatus === 'loading' && !playbackMode;
 
-  if (!bandPower) {
+  if (!activeBandPower) {
     return (
       <div style={{ padding: '16px', background: '#fff', borderRadius: '12px', margin: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: '20px' }}>📊</span>
           <span>{selectedChannel}</span>
-          <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 频段能量</span>
+          <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{name} · 频段能量</span>
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
+          {failed && <span style={{ fontSize: '12px', color: '#d32f2f', fontWeight: 500 }}>⚠ {streamError || '连接失败'}</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{
+          color: failed ? '#c62828' : '#999', padding: '40px 0', textAlign: 'center',
+          background: failed ? '#fff5f5' : 'transparent',
+          border: failed ? '1px dashed #e57373' : 'none', borderRadius: '8px',
+        }}>
+          {failed ? '频段数据暂不可用，恢复后自动刷新' : loading ? '等待数据中...' : '等待数据中...'}
+        </div>
       </div>
     );
   }
 
   const data = LABELS.map((label, i) => ({
     name: label,
-    power: (bandPower as any)[label.toLowerCase()] || 0,
+    power: (activeBandPower as any)[label.toLowerCase()] || 0,
     color: COLORS[i]
   }));
 
@@ -39,8 +46,9 @@ export const BandPowerChart: React.FC = () => {
       <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '20px' }}>📊</span>
         <span>{selectedChannel}</span>
-        <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 频段能量</span>
+        <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{name} · 频段能量</span>
         {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放模式</span>}
+        {failed && <span style={{ fontSize: '12px', color: '#d32f2f', fontWeight: 500 }}>⚠ {streamError}</span>}
       </h3>
       <ResponsiveContainer width="100%" height={200}>
         <BarChart data={data}>

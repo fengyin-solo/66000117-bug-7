@@ -1,173 +1,102 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { useEEGStore } from '../store/eeg';
-import { EEGData, BandPower, BrainState, CorrelationData } from '../types';
-import axios from 'axios';
+import { useActiveEEGData } from '../hooks/useActiveEEGData';
+import { fetchSample } from '../api/eeg';
+import { channelName } from '../constants';
 
-const CHANNEL_NAMES: Record<string, string> = {
-  Fp1: '左前额', Fp2: '右前额', F3: '左额', F4: '右额',
-  C3: '左中央', C4: '右中央', P3: '左顶', P4: '右顶',
-  O1: '左枕', O2: '右枕'
+const POLL_INTERVAL_MS = 3000;
+
+const describeError = (err: unknown): string => {
+  if (axiosIsCancel(err)) return '';
+  if (axiosIsTimeout(err)) return '采样超时，正在重试…';
+  if (axiosNoResponse(err)) return '后端服务不可用，正在重试…';
+  return (err as Error)?.message || '数据获取失败，正在重试…';
 };
 
-const ALL_CHANNELS = ['Fp1', 'Fp2', 'F3', 'F4', 'C3', 'C4', 'P3', 'P4', 'O1', 'O2'];
-const SAMPLE_RATE = 256;
-
-const generateMockEEG = (durationSec: number = 3.0): EEGData => {
-  const length = Math.floor(SAMPLE_RATE * durationSec);
-  const time: number[] = [];
-  const data: Record<string, number[]> = {};
-  for (let i = 0; i < length; i++) {
-    time.push(i / SAMPLE_RATE);
-  }
-  for (const ch of ALL_CHANNELS) {
-    const sig: number[] = [];
-    const alphaFreq = 8 + Math.random() * 4;
-    const betaFreq = 15 + Math.random() * 10;
-    for (let i = 0; i < length; i++) {
-      const t = i / SAMPLE_RATE;
-      const value = 0.5 * Math.sin(2 * Math.PI * alphaFreq * t) +
-                    0.3 * Math.sin(2 * Math.PI * betaFreq * t) +
-                    0.2 * (Math.random() * 2 - 1);
-      sig.push(value);
-    }
-    data[ch] = sig;
-  }
-  return { channels: ALL_CHANNELS, sample_rate: SAMPLE_RATE, data, time, duration: durationSec };
-};
-
-const computeBandPower = (): BandPower => {
-  const total = 10 + Math.random() * 5;
-  return {
-    delta: total * (0.2 + Math.random() * 0.1),
-    theta: total * (0.15 + Math.random() * 0.1),
-    alpha: total * (0.25 + Math.random() * 0.15),
-    beta: total * (0.3 + Math.random() * 0.15),
-    gamma: total * (0.1 + Math.random() * 0.05),
-  };
-};
-
-const computeBrainState = (bands: BandPower): BrainState => {
-  const total = bands.delta + bands.theta + bands.alpha + bands.beta + bands.gamma + 1e-10;
-  const betaRel = bands.beta / total;
-  const alphaRel = bands.alpha / total;
-  const thetaRel = bands.theta / total;
-  const focus = Math.min(100, Math.max(0, betaRel * 300 + (Math.random() - 0.5) * 10));
-  const relaxation = Math.min(100, Math.max(0, alphaRel * 300 + (Math.random() - 0.5) * 10));
-  const fatigue = Math.min(100, Math.max(0, thetaRel * 300 + (Math.random() - 0.5) * 10));
-  const scores = { focused: focus, relaxed: relaxation, fatigued: fatigue };
-  const maxScore = Math.max(...Object.values(scores));
-  let status: 'focused' | 'relaxed' | 'fatigued' | 'neutral' = 'neutral';
-  let statusLabel = '平稳';
-  let statusColor = '#757575';
-  if (maxScore >= 50) {
-    const maxKey = Object.keys(scores).find(k => scores[k as keyof typeof scores] === maxScore) as keyof typeof scores;
-    status = maxKey;
-    if (status === 'focused') { statusLabel = '专注'; statusColor = '#1976d2'; }
-    else if (status === 'relaxed') { statusLabel = '放松'; statusColor = '#388e3c'; }
-    else { statusLabel = '疲劳'; statusColor = '#d32f2f'; }
-  }
-  return {
-    focus: Math.round(focus * 10) / 10,
-    relaxation: Math.round(relaxation * 10) / 10,
-    fatigue: Math.round(fatigue * 10) / 10,
-    status,
-    statusLabel,
-    statusColor,
-    timestamp: Date.now(),
-  };
-};
-
-const computeCorrelation = (targetChannel: string, eegData: EEGData): CorrelationData => {
-  const targetData = eegData.data[targetChannel];
-  const correlations = ALL_CHANNELS.map(ch => {
-    if (ch === targetChannel) {
-      return { channel: ch, targetChannel, correlation: 1.0, coherence: 1.0 };
-    }
-    const chData = eegData.data[ch];
-    let sumXY = 0, sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0;
-    const n = targetData.length;
-    for (let i = 0; i < n; i++) {
-      sumXY += targetData[i] * chData[i];
-      sumX += targetData[i];
-      sumY += chData[i];
-      sumX2 += targetData[i] * targetData[i];
-      sumY2 += chData[i] * chData[i];
-    }
-    const corr = (n * sumXY - sumX * sumY) /
-      Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-    return {
-      channel: ch,
-      targetChannel,
-      correlation: Math.round(corr * 10000) / 10000,
-      coherence: Math.round((0.3 + Math.random() * 0.5) * 10000) / 10000,
-    };
-  });
-  return { targetChannel, correlations };
+const axiosIsCancel = (err: unknown): boolean =>
+  !!err && (typeof err === 'object') && ((err as any).code === 'ERR_CANCELED' || (err as any).name === 'CanceledError');
+const axiosIsTimeout = (err: unknown): boolean =>
+  !!err && typeof err === 'object' && ((err as any).code === 'ECONNABORTED' || /timeout/i.test((err as any).message || ''));
+const axiosNoResponse = (err: unknown): boolean => {
+  const e = err as any;
+  return !!e && typeof e === 'object' && !e.response && e.code !== 'ERR_CANCELED' && e.code !== 'ECONNABORTED';
 };
 
 export const WaveformChart: React.FC = () => {
   const {
-    eegData, selectedChannel, setEEGData, setBandPower, setBrainState, setCorrelationData,
-    isRecording, addRecordingFrame, playbackMode,
+    selectedChannel, setStreamLoading, applyStreamSample, setStreamError,
+    streamStatus, streamError, isRecording, playbackMode,
   } = useEEGStore();
-  const [loading, setLoading] = useState(false);
-  const intervalRef = useRef<number | null>(null);
+  const activeEEGData = useActiveEEGData();
+  const [retryTick, setRetryTick] = useState(0);
 
-  const fetchEEG = async () => {
-    const state = useEEGStore.getState();
-    if (state.playbackMode) return;
-    setLoading(true);
-    let eeg: EEGData, bands: BandPower, brainState: BrainState, correlation: CorrelationData;
+  const abortRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+
+  const loadSample = useCallback(async (channel: string, seq: number) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStreamLoading();
     try {
-      const { data } = await axios.get(`/api/eeg/sample/${state.selectedChannel}?duration=3`);
-      eeg = data.eeg;
-      bands = data.bands;
-      brainState = data.brainState;
-      correlation = data.correlation;
-    } catch {
-      eeg = generateMockEEG(3);
-      bands = computeBandPower();
-      brainState = computeBrainState(bands);
-      correlation = computeCorrelation(state.selectedChannel, eeg);
+      const sample = await fetchSample(channel, controller.signal);
+      // 代次防护：切换通道 / 组件卸载 / 手动重试后，旧请求结果一律忽略
+      if (seq !== requestSeqRef.current) return;
+      // applyStreamSample 内部还会再按当前通道校验一次
+      applyStreamSample({ ...sample, timestamp: Date.now() });
+    } catch (err) {
+      if (seq !== requestSeqRef.current) return;
+      const message = describeError(err);
+      if (message) setStreamError(message);
     }
-    state.setEEGData(eeg);
-    state.setBandPower(bands);
-    state.setBrainState(brainState);
-    state.setCorrelationData(correlation);
-    if (state.isRecording) {
-      state.addRecordingFrame(eeg, bands, brainState, correlation);
-    }
-    setLoading(false);
-  };
+  }, [setStreamLoading, applyStreamSample, setStreamError]);
 
   useEffect(() => {
     if (playbackMode) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      // 回放期间取消所有在途实时请求
+      requestSeqRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
       return;
     }
-    fetchEEG();
-    intervalRef.current = window.setInterval(fetchEEG, 3000);
+    const seq = ++requestSeqRef.current;
+    loadSample(selectedChannel, seq);
+    const timer = window.setInterval(() => {
+      // 同一通道周期刷新；陈旧在途请求先取消，避免重试重复堆叠同一段曲线
+      if (abortRef.current && useEEGStore.getState().streamStatus === 'loading') {
+        abortRef.current.abort();
+      }
+      const nextSeq = ++requestSeqRef.current;
+      loadSample(useEEGStore.getState().selectedChannel, nextSeq);
+    }, POLL_INTERVAL_MS);
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      window.clearInterval(timer);
+      requestSeqRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
     };
-  }, [selectedChannel, playbackMode]);
+  }, [selectedChannel, playbackMode, retryTick, loadSample]);
 
-  const chartData = eegData?.data[selectedChannel]?.map((v: number, i: number) => ({
-    t: eegData.time[i]?.toFixed(3), value: v.toFixed(4)
+  const handleRetry = () => {
+    if (playbackMode) return;
+    abortRef.current?.abort();
+    setRetryTick(t => t + 1);
+  };
+
+  const chartData = activeEEGData?.data[selectedChannel]?.map((v: number, i: number) => ({
+    t: activeEEGData.time[i]?.toFixed(3), value: Number(v.toFixed(4)),
   })) || [];
 
-  const channelName = CHANNEL_NAMES[selectedChannel] || selectedChannel;
+  const name = channelName(selectedChannel);
+  const loading = streamStatus === 'loading' && !playbackMode;
+  const failed = streamStatus === 'error' && !playbackMode;
 
   return (
     <div style={{ padding: '16px', background: '#fff', borderRadius: '12px', margin: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-      <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '20px' }}>📈</span>
         <span>{selectedChannel}</span>
-        <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 波形图</span>
+        <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{name} · 波形图</span>
         {isRecording && (
           <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#d32f2f', fontWeight: 500 }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#d32f2f', animation: 'pulse 1s infinite' }} />
@@ -177,14 +106,47 @@ export const WaveformChart: React.FC = () => {
         {playbackMode && (
           <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放模式</span>
         )}
-        {loading && !playbackMode && <span style={{ fontSize: '12px', color: '#999' }}>刷新中...</span>}
+        {loading && <span style={{ fontSize: '12px', color: '#999' }}>刷新中...</span>}
+        {streamStatus === 'online' && !playbackMode && (
+          <span style={{ fontSize: '12px', color: '#388e3c', fontWeight: 500 }}>● 已连接</span>
+        )}
+        {failed && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#d32f2f', fontWeight: 500 }}>
+            ⚠ {streamError || '连接失败'}
+            <button
+              onClick={handleRetry}
+              style={{
+                padding: '2px 10px', fontSize: '12px', borderRadius: '12px',
+                border: '1px solid #d32f2f', background: '#fff', color: '#d32f2f', cursor: 'pointer',
+              }}
+            >
+              立即重试
+            </button>
+          </span>
+        )}
       </h3>
-      <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={chartData}>
-          <XAxis dataKey="t" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 10 }} /><Tooltip />
-          <Line type="monotone" dataKey="value" stroke="#1565c0" dot={false} strokeWidth={1.5} />
-        </LineChart>
-      </ResponsiveContainer>
+
+      {failed && chartData.length === 0 ? (
+        <div style={{
+          height: 200, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: '12px',
+          background: '#fff5f5', border: '1px dashed #e57373', borderRadius: '8px', color: '#c62828',
+        }}>
+          <span style={{ fontSize: '14px' }}>⚠ {streamError || '无法获取波形数据'}</span>
+          <span style={{ fontSize: '12px', color: '#999' }}>将自动重试，恢复后继续显示 {selectedChannel}（{name}）</span>
+        </div>
+      ) : chartData.length === 0 ? (
+        <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontSize: '13px' }}>
+          {loading ? '等待数据中...' : playbackMode ? '暂无回放数据' : '等待数据中...'}
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={chartData}>
+            <XAxis dataKey="t" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 10 }} /><Tooltip />
+            <Line type="monotone" dataKey="value" stroke="#1565c0" dot={false} strokeWidth={1.5} />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 };
