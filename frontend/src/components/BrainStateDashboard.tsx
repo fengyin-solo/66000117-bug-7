@@ -1,5 +1,6 @@
 import React from 'react';
 import { useEEGStore } from '../store/eeg';
+import { FetchStatusHint } from './FetchStatusHint';
 
 const CHANNEL_NAMES: Record<string, string> = {
   Fp1: '左前额', Fp2: '右前额', F3: '左额', F4: '右额',
@@ -33,10 +34,11 @@ const ScoreBar: React.FC<{ label: string; value: number; color: string; icon: st
 };
 
 export const BrainStateDashboard: React.FC = () => {
-  const { brainState, selectedChannel, playbackMode, activeRecording, playbackState } = useEEGStore();
+  const { brainState, selectedChannel, playbackMode, activeRecording, playbackState, dataChannel, fetchStatus, fetchError } = useEEGStore();
   const channelName = CHANNEL_NAMES[selectedChannel] || selectedChannel;
+  const hasLiveData = playbackMode || dataChannel === selectedChannel;
 
-  if (!brainState) {
+  if (!brainState || !hasLiveData) {
     return (
       <div style={{ padding: '16px', background: '#fff', borderRadius: '12px', margin: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <div style={{ marginBottom: '16px', padding: '16px', background: 'linear-gradient(135deg, #1565c0, #0d47a1)', borderRadius: '10px', color: '#fff', textAlign: 'center' }}>
@@ -49,7 +51,9 @@ export const BrainStateDashboard: React.FC = () => {
           {playbackMode ? '回放脑状态' : '实时脑状态'}
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>
+          {playbackMode ? '等待数据中...' : <FetchStatusHint status={fetchStatus} error={fetchError} large />}
+        </div>
       </div>
     );
   }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Legend } from 'recharts';
 import { useEEGStore } from '../store/eeg';
+import { FetchStatusHint } from './FetchStatusHint';
 
 const CHANNEL_NAMES: Record<string, string> = {
   Fp1: '左前额', Fp2: '右前额', F3: '左额', F4: '右额',
@@ -9,10 +10,11 @@ const CHANNEL_NAMES: Record<string, string> = {
 };
 
 export const CorrelationChart: React.FC = () => {
-  const { correlationData, selectedChannel, playbackMode } = useEEGStore();
+  const { correlationData, selectedChannel, playbackMode, dataChannel, fetchStatus, fetchError } = useEEGStore();
   const channelName = CHANNEL_NAMES[selectedChannel] || selectedChannel;
+  const hasLiveData = playbackMode || dataChannel === selectedChannel;
 
-  if (!correlationData) {
+  if (!correlationData || !hasLiveData) {
     return (
       <div style={{ padding: '16px', background: '#fff', borderRadius: '12px', margin: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -21,7 +23,9 @@ export const CorrelationChart: React.FC = () => {
           <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 通道相关分析</span>
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>
+          {playbackMode ? '等待数据中...' : <FetchStatusHint status={fetchStatus} error={fetchError} large />}
+        </div>
       </div>
     );
   }

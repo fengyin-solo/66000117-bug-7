@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from ..services.eeg_processor import generate_mock_eeg, compute_band_power, compute_spectrogram, compute_brain_state, compute_correlation, SAMPLE_RATE
 
 router = APIRouter(prefix="/eeg", tags=["eeg"])
@@ -44,7 +44,7 @@ async def list_channels():
 async def full_sample(channel: str, duration: float = 3.0):
     data = generate_mock_eeg(duration)
     if channel not in data['data']:
-        return {'error': 'Channel not found'}
+        raise HTTPException(status_code=404, detail=f'Channel {channel} not found')
     channel_data = data['data'][channel]
     return {
         'channel': channel,

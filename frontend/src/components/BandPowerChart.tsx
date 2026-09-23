@@ -1,6 +1,7 @@
 import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useEEGStore } from '../store/eeg';
+import { FetchStatusHint } from './FetchStatusHint';
 
 const COLORS = ['#1565c0','#2e7d32','#f9a825','#e53935','#6a1b9a'];
 const LABELS = ['Delta','Theta','Alpha','Beta','Gamma'];
@@ -11,10 +12,11 @@ const CHANNEL_NAMES: Record<string, string> = {
 };
 
 export const BandPowerChart: React.FC = () => {
-  const { bandPower, selectedChannel, playbackMode } = useEEGStore();
+  const { bandPower, selectedChannel, playbackMode, dataChannel, fetchStatus, fetchError } = useEEGStore();
   const channelName = CHANNEL_NAMES[selectedChannel] || selectedChannel;
+  const hasLiveData = playbackMode || dataChannel === selectedChannel;
 
-  if (!bandPower) {
+  if (!bandPower || !hasLiveData) {
     return (
       <div style={{ padding: '16px', background: '#fff', borderRadius: '12px', margin: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <h3 style={{ margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -23,7 +25,9 @@ export const BandPowerChart: React.FC = () => {
           <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 频段能量</span>
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>
+          {playbackMode ? '等待数据中...' : <FetchStatusHint status={fetchStatus} error={fetchError} large />}
+        </div>
       </div>
     );
   }
